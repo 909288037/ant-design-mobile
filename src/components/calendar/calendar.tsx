@@ -4,10 +4,13 @@ import React, {
   useState,
   useImperativeHandle,
   useMemo,
+  useEffect,
+  useRef,
 } from 'react'
 import { NativeProps, withNativeProps } from '../../utils/native-props'
 import dayjs from 'dayjs'
 import classNames from 'classnames'
+import Swiper from '../swiper'
 import { mergeProps } from '../../utils/with-default-props'
 import { ArrowLeft } from './arrow-left'
 import { ArrowLeftDouble } from './arrow-left-double'
@@ -21,6 +24,7 @@ import {
   DateRange,
   Page,
 } from './convert'
+import swiper from '../swiper'
 
 dayjs.extend(isoWeek)
 
@@ -32,8 +36,10 @@ export type CalendarRef = {
 }
 
 export type CalendarProps = {
+  prevWeekButton?: React.ReactNode
   prevMonthButton?: React.ReactNode
   prevYearButton?: React.ReactNode
+  nextWeekButton?: React.ReactNode
   nextMonthButton?: React.ReactNode
   nextYearButton?: React.ReactNode
   onPageChange?: (year: number, month: number) => void
@@ -45,6 +51,7 @@ export type CalendarProps = {
   shouldDisableDate?: (date: Date) => boolean
   minPage?: Page
   maxPage?: Page
+  weekModel?: boolean
 } & (
   | {
       selectionMode?: undefined
@@ -71,9 +78,12 @@ const defaultProps = {
   weekStartsOn: 'Sunday',
   defaultValue: null,
   allowClear: true,
+  weekModel: false,
   prevMonthButton: <ArrowLeft />,
+  prevWeekButton: <ArrowLeft />,
   prevYearButton: <ArrowLeftDouble />,
   nextMonthButton: <ArrowLeft />,
+  nextWeekButton: <ArrowLeft />,
   nextYearButton: <ArrowLeftDouble />,
 }
 
@@ -82,6 +92,10 @@ export const Calendar = forwardRef<CalendarRef, CalendarProps>((p, ref) => {
   const props = mergeProps(defaultProps, p)
   const { locale } = useConfig()
   const markItems = [...locale.Calendar.markItems]
+  const swiperRef = useRef(null)
+  const swiperPreIndexRef = useRef(null)
+  const type = props.weekModel ? 'week' : 'month'
+
   if (props.weekStartsOn === 'Sunday') {
     const item = markItems.pop()
     if (item) markItems.unshift(item)
@@ -105,12 +119,26 @@ export const Calendar = forwardRef<CalendarRef, CalendarProps>((p, ref) => {
   const [intermediate, setIntermediate] = useState(false)
 
   const [current, setCurrent] = useState(() =>
-    dayjs(dateRange ? dateRange[0] : today).date(1)
+    props.weekModel
+      ? dayjs(dateRange ? dateRange[1] : today)
+      : dayjs(dateRange ? dateRange[0] : today).date(1)
   )
+
+  useEffect(() => {
+    return () => {}
+  }, [current])
 
   useUpdateEffect(() => {
     props.onPageChange?.(current.year(), current.month() + 1)
   }, [current])
+
+  useEffect(() => {
+    setCurrent(
+      props.weekModel
+        ? dayjs(dateRange ? dateRange[1] : today)
+        : dayjs(dateRange ? dateRange[0] : today).date(1)
+    )
+  }, [props.weekModel])
 
   useImperativeHandle(ref, () => ({
     jumpTo: pageOrPageGenerator => {
@@ -133,7 +161,8 @@ export const Calendar = forwardRef<CalendarRef, CalendarProps>((p, ref) => {
   const handlePageChange = (
     action: 'subtract' | 'add',
     num: number,
-    type: 'month' | 'year'
+    type: 'month' | 'year' | 'week',
+    index
   ) => {
     const nxtCurrent = current[action](num, type)
     if (action === 'subtract' && props.minPage) {
@@ -149,6 +178,9 @@ export const Calendar = forwardRef<CalendarRef, CalendarProps>((p, ref) => {
       }
     }
     setCurrent(current[action](num, type))
+    document.querySelector(
+      '.adm-swiper-track-inner'
+    ).style.transform = `translate3d(${(index - 1) * 100}%, 0,0)`
   }
 
   const header = (
@@ -169,12 +201,32 @@ export const Calendar = forwardRef<CalendarRef, CalendarProps>((p, ref) => {
       >
         {props.prevMonthButton}
       </a>
+      <a
+        className={`${classPrefix}-arrow-button ${classPrefix}-arrow-button-month`}
+        onClick={() => {
+          handlePageChange('subtract', 1, 'week')
+        }}
+      >
+        {props.prevWeekButton}
+      </a>
       <div className={`${classPrefix}-title`}>
         {locale.Calendar.renderYearAndMonth(
           current.year(),
           current.month() + 1
         )}
       </div>
+      <a
+        className={classNames(
+          `${classPrefix}-arrow-button`,
+          `${classPrefix}-arrow-button-right`,
+          `${classPrefix}-arrow-button-right-month`
+        )}
+        onClick={() => {
+          handlePageChange('add', 1, 'week')
+        }}
+      >
+        {props.nextWeekButton}
+      </a>
       <a
         className={classNames(
           `${classPrefix}-arrow-button`,
@@ -205,13 +257,15 @@ export const Calendar = forwardRef<CalendarRef, CalendarProps>((p, ref) => {
   const maxDay = useMemo(() => props.max && dayjs(props.max), [props.max])
   const minDay = useMemo(() => props.min && dayjs(props.min), [props.min])
 
-  function renderCells() {
+  function renderCells(current) {
     const cells: ReactNode[] = []
     let iterator = current.subtract(current.isoWeekday(), 'day')
+    const totalityDays = props.weekModel ? 7 : 6 * 7
+
     if (props.weekStartsOn === 'Monday') {
       iterator = iterator.add(1, 'day')
     }
-    while (cells.length < 6 * 7) {
+    while (cells.length < totalityDays) {
       const d = iterator
       let isSelect = false
       let isBegin = false
@@ -294,7 +348,47 @@ export const Calendar = forwardRef<CalendarRef, CalendarProps>((p, ref) => {
     }
     return cells
   }
-  const body = <div className={`${classPrefix}-cells`}>{renderCells()}</div>
+
+  const body = (
+    <Swiper
+      defaultIndex={1}
+      ref={swiperRef}
+      loop
+      indicator={() => null}
+      onIndexChange={index => {
+        if (swiperPreIndexRef.current === null) {
+          swiperPreIndexRef.current = index
+        } else {
+          if (swiperPreIndexRef.current === 2 && index === 0) {
+            handlePageChange('add', 1, type, index)
+          } else if (swiperPreIndexRef.current === 0 && index === 2) {
+            handlePageChange('subtract', 1, type, index)
+          } else if (swiperPreIndexRef.current > index) {
+            handlePageChange('subtract', 1, type, index)
+          } else {
+            handlePageChange('add', 1, type, index)
+          }
+          swiperPreIndexRef.current = index
+          return
+        }
+      }}
+    >
+      <Swiper.Item>
+        <div className={`${classPrefix}-cells`}>
+          {renderCells(current.subtract(1, type))}
+        </div>
+      </Swiper.Item>
+
+      <Swiper.Item>
+        <div className={`${classPrefix}-cells`}>{renderCells(current)}</div>
+      </Swiper.Item>
+      <Swiper.Item>
+        <div className={`${classPrefix}-cells`}>
+          {renderCells(current.add(1, type))}
+        </div>
+      </Swiper.Item>
+    </Swiper>
+  )
 
   const mark = (
     <div className={`${classPrefix}-mark`}>
